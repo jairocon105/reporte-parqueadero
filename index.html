@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Reporte Parqueadero</title>
+  <style>
+    body { font-family: system-ui, Arial; margin: 16px; max-width: 520px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    label { display: block; margin: 12px 0 6px; font-weight: 600; }
+    input, button { width: 100%; padding: 12px; font-size: 16px; }
+    input { box-sizing: border-box; }
+    button { margin-top: 14px; cursor: pointer; }
+    .hint { font-size: 13px; opacity: .75; margin-top: 6px; }
+    .row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
+    .status { margin-top: 12px; font-size: 14px; }
+    .ok { color: #0a7a2f; }
+    .err { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>Reporte: vehículo en parqueadero equivocado</h1>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label for="parq">Parqueadero afectado *</label>
+        <input id="parq" placeholder="Ej: T4-140-4147 o P-214" required />
+        <div class="hint">Escribe el número/código exactamente como está señalizado.</div>
+      </div>
+
+      <div>
+        <label for="placa">Placa (opcional)</label>
+        <input id="placa" placeholder="Ej: ABC123" />
+        <div class="hint">Si la digitas, reduces errores del OCR.</div>
+      </div>
+
+      <div>
+        <label for="foto">Foto del vehículo *</label>
+        <!-- capture="environment" abre cámara trasera en muchos móviles -->
+        <input id="foto" type="file" accept="image/*" capture="environment" required />
+        <div class="hint">Toma la foto enfocando la placa y el carro completo si puedes.</div>
+      </div>
+
+      <div>
+        <label for="token">Código (opcional pero recomendado)</label>
+        <input id="token" placeholder="PIN del conjunto (si usas uno)" />
+        <div class="hint">Sirve para evitar reportes de personas no autorizadas.</div>
+      </div>
+
+      <button id="enviar">Enviar reporte</button>
+      <div id="status" class="status"></div>
+    </div>
+  </div>
+
+  <script>
+    // 1) Pega aquí tu Webhook "Production" de n8n (recomendado, no el Test)
+    const N8N_WEBHOOK_URL = "https://TU-DOMINIO-N8N/webhook/REEMPLAZA-ESTO";
+
+    // 2) Si quieres una clave simple adicional, puedes validar esto en n8n
+    //    (puedes dejarlo vacío si no lo usarás)
+    // const CLIENT_SHARED_KEY = "CAMBIA-ESTO";
+
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $("status");
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = "status " + (kind === "ok" ? "ok" : kind === "err" ? "err" : "");
+    }
+
+    function normalizePlate(s) {
+      return (s || "")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "")
+        .trim();
+    }
+
+    $("enviar").addEventListener("click", async () => {
+      try {
+        const parqueadero = $("parq").value.trim();
+        const placaDigitada = normalizePlate($("placa").value);
+        const token = $("token").value.trim();
+        const file = $("foto").files?.[0];
+
+        if (!parqueadero) return setStatus("Falta el parqueadero.", "err");
+        if (!file) return setStatus("Falta la foto.", "err");
+
+        setStatus("Enviando…", "");
+
+        const form = new FormData();
+        form.append("parqueadero_reportado", parqueadero);
+        form.append("placa_digitada", placaDigitada);
+        form.append("token", token);
+        form.append("foto", file, file.name || "foto.jpg");
+        form.append("client_timestamp", new Date().toISOString());
+
+        const res = await fetch(N8N_WEBHOOK_URL, {
+          method: "POST",
+          body: form
+        });
+
+        const text = await res.text();
+        if (!res.ok) {
+          return setStatus(`Error al enviar (${res.status}). ${text}`, "err");
+        }
+
+        // n8n puede responder JSON; mostramos algo simple
+        setStatus("Reporte enviado ✅ Gracias.", "ok");
+
+        // Reset opcional
+        $("foto").value = "";
+        // $("parq").value = ""; // si quieres borrar también
+        // $("placa").value = "";
+      } catch (e) {
+        setStatus("Error: " + (e?.message || e), "err");
+      }
+    });
+  </script>
+</body>
+</html>
