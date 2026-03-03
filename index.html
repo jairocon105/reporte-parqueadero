@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Reporte Validación Parqueadero</title>
+  <title>Reporte Parqueadero</title>
   <style>
     body { font-family: system-ui, Arial; margin: 16px; max-width: 520px; }
     h1 { font-size: 20px; margin: 0 0 12px; }
@@ -89,7 +89,6 @@
         .trim();
     }
 
-    // Botones cámara y galería
     $("btnCamara").addEventListener("click", () => $("fotoCamara").click());
     $("btnGaleria").addEventListener("click", () => $("fotoGaleria").click());
 
@@ -97,9 +96,8 @@
       return $("fotoGaleria").files?.[0] || $("fotoCamara").files?.[0] || null;
     }
 
-    // --- NUEVO: Compresión/resize en front-end ---
-    function fmtKB(bytes) {
-      return (bytes / 1024).toFixed(0) + " KB";
+    function fmtMB(bytes) {
+      return (bytes / (1024 * 1024)).toFixed(2) + " MB";
     }
 
     function readFileAsDataURL(file) {
@@ -111,26 +109,11 @@
       });
     }
 
-    async function compressImageToJpeg(file, opts = {}) {
-      const {
-        maxSide = 1280,
-        quality = 0.75
-      } = opts;
-
-      const dataUrl = await readFileAsDataURL(file);
-
-      const img = new Image();
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-        img.src = dataUrl;
-      });
-
+    async function renderJpegBlob(img, maxSide, quality) {
       let w = img.width;
       let h = img.height;
-
-      // resize manteniendo proporción
       const longer = Math.max(w, h);
+
       if (longer > maxSide) {
         const scale = maxSide / longer;
         w = Math.round(w * scale);
@@ -142,33 +125,60 @@
       canvas.height = h;
       const ctx = canvas.getContext("2d");
 
-      // fondo blanco por si viene PNG con transparencia
+      // fondo blanco (por transparencia)
       ctx.fillStyle = "#fff";
       ctx.fillRect(0, 0, w, h);
-
       ctx.drawImage(img, 0, 0, w, h);
 
       const blob = await new Promise((resolve) => {
         canvas.toBlob((b) => resolve(b), "image/jpeg", quality);
       });
 
-      // por seguridad
       if (!blob) throw new Error("No se pudo procesar la imagen.");
+      return { blob, w, h, quality, maxSide };
+    }
 
-      // Devolver como File para mantener nombre y tipo
-      const outName = "foto.jpg";
-      return new File([blob], outName, { type: "image/jpeg" });
+    async function compressUnder2MB(file) {
+      const LIMIT = 2 * 1024 * 1024; // 2MB
+      const dataUrl = await readFileAsDataURL(file);
+
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+
+      // Estrategia: bajar quality primero, luego maxSide
+      const maxSides = [1280, 1120, 960, 840, 720];
+      const qualities = [0.78, 0.72, 0.66, 0.60, 0.54, 0.48, 0.42];
+
+      let lastTry = null;
+
+      for (const maxSide of maxSides) {
+        for (const q of qualities) {
+          const attempt = await renderJpegBlob(img, maxSide, q);
+          lastTry = attempt;
+          if (attempt.blob.size <= LIMIT) {
+            const outFile = new File([attempt.blob], "foto.jpg", { type: "image/jpeg" });
+            return { outFile, meta: attempt, ok: true };
+          }
+        }
+      }
+
+      // no se logró
+      const outFile = new File([lastTry.blob], "foto.jpg", { type: "image/jpeg" });
+      return { outFile, meta: lastTry, ok: false };
     }
 
     async function previewSizeHint() {
       const file = getSelectedFile();
       if (!file) { hintSizeEl.textContent = ""; return; }
-      hintSizeEl.textContent = `Tamaño original: ${fmtKB(file.size)}. Se comprimirá automáticamente antes de enviar.`;
+      hintSizeEl.textContent = `Tamaño original: ${fmtMB(file.size)}. Se comprimirá automáticamente a < 2MB antes de enviar.`;
     }
 
     $("fotoCamara").addEventListener("change", previewSizeHint);
     $("fotoGaleria").addEventListener("change", previewSizeHint);
-    // --- FIN NUEVO ---
 
     $("enviar").addEventListener("click", async () => {
       try {
@@ -180,16 +190,20 @@
         if (!parqueadero) return setStatus("Falta el parqueadero.", "err");
         if (!file) return setStatus("Debes tomar o subir una foto.", "err");
 
-        setStatus("Procesando imagen…", "");
+        setStatus("Procesando imagen (reduciendo a < 2MB)…", "");
 
-        // NUEVO: comprimir/resize antes de enviar
-        const fotoComprimida = await compressImageToJpeg(file, {
-          maxSide: 1280,
-          quality: 0.75
-        });
+        const { outFile, meta, ok } = await compressUnder2MB(file);
 
-        // Mensaje de tamaño final (útil para diagnosticar)
-        hintSizeEl.textContent = `Tamaño original: ${fmtKB(file.size)} → Tamaño enviado: ${fmtKB(fotoComprimida.size)}.`;
+        hintSizeEl.textContent =
+          `Original: ${fmtMB(file.size)} → Enviado: ${fmtMB(outFile.size)} ` +
+          `(maxSide=${meta.maxSide}px, quality=${meta.quality}).`;
+
+        if (!ok) {
+          return setStatus(
+            `No se pudo bajar la imagen a menos de 2MB. ` +
+            `Intenta tomar la foto con menor resolución o desde más lejos.`, "err"
+          );
+        }
 
         setStatus("Enviando…", "");
 
@@ -197,26 +211,16 @@
         form.append("parqueadero_reportado", parqueadero);
         form.append("placa_digitada", placaDigitada);
         form.append("token", token);
-
-        // IMPORTANTE: mantenemos el mismo nombre de campo "foto"
-        form.append("foto", fotoComprimida, fotoComprimida.name);
-
+        form.append("foto", outFile, outFile.name);
         form.append("client_timestamp", new Date().toISOString());
 
-        const res = await fetch(N8N_WEBHOOK_URL, {
-          method: "POST",
-          body: form
-        });
-
+        const res = await fetch(N8N_WEBHOOK_URL, { method: "POST", body: form });
         const text = await res.text();
 
-        if (!res.ok) {
-          return setStatus(`Error al enviar (${res.status}). ${text}`, "err");
-        }
+        if (!res.ok) return setStatus(`Error al enviar (${res.status}). ${text}`, "err");
 
         setStatus("Reporte enviado ✅ Gracias.", "ok");
 
-        // Reset de imagen
         $("fotoCamara").value = "";
         $("fotoGaleria").value = "";
         hintSizeEl.textContent = "";
