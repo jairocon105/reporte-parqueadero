@@ -12,19 +12,43 @@
     input { box-sizing: border-box; }
     button { margin-top: 10px; cursor: pointer; border-radius: 8px; border: 1px solid #ccc; }
     button.primary { background: #111; color: white; border: none; margin-top: 14px; }
+    button:disabled { opacity: .65; cursor: not-allowed; }
     .hint { font-size: 13px; opacity: .75; margin-top: 6px; }
     .row { display: grid; grid-template-columns: 1fr; gap: 10px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
     .status { margin-top: 12px; font-size: 14px; }
     .ok { color: #0a7a2f; }
     .err { color: #b00020; }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 9999;
+    }
+    .modal {
+      width: 100%;
+      max-width: 520px;
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid #e6e6e6;
+      box-shadow: 0 10px 30px rgba(0,0,0,.18);
+      padding: 16px;
+    }
+    .modal h2 { margin: 0 0 10px; font-size: 18px; }
+    .modal .msg { font-size: 15px; line-height: 1.35; white-space: pre-wrap; }
+    .modal .actions { margin-top: 14px; }
   </style>
 </head>
 <body>
   <h1>Reporte: vehículo en parqueadero equivocado</h1>
 
   <div class="card">
-    <div class="row">
+    <div class="row" id="formRoot">
 
       <div>
         <label for="parq">Parqueadero afectado *</label>
@@ -58,15 +82,20 @@
         <div id="hintSize" class="hint"></div>
       </div>
 
-      <div>
-        <label for="token">Código (opcional pero recomendado)</label>
-        <input id="token" placeholder="PIN del conjunto (si usas uno)" />
-        <div class="hint">Sirve para evitar reportes de personas no autorizadas.</div>
-      </div>
-
       <button id="enviar" class="primary">Enviar reporte</button>
       <div id="status" class="status"></div>
 
+    </div>
+  </div>
+
+  <!-- Modal resultado -->
+  <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal">
+      <h2 id="modalTitle">Resultado</h2>
+      <div id="modalMsg" class="msg"></div>
+      <div class="actions">
+        <button id="modalOk" class="primary" type="button">Ok</button>
+      </div>
     </div>
   </div>
 
@@ -76,6 +105,14 @@
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
     const hintSizeEl = $("hintSize");
+    const formRoot = $("formRoot");
+    const btnEnviar = $("enviar");
+
+    // Modal
+    const modalBackdrop = $("modalBackdrop");
+    const modalTitle = $("modalTitle");
+    const modalMsg = $("modalMsg");
+    const modalOk = $("modalOk");
 
     function setStatus(msg, kind) {
       statusEl.textContent = msg;
@@ -87,6 +124,43 @@
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, "")
         .trim();
+    }
+
+    function setFormDisabled(disabled) {
+      // deshabilita inputs y botones dentro del "formRoot"
+      const controls = formRoot.querySelectorAll("input, button");
+      controls.forEach(el => {
+        // permitir que el modal funcione aparte
+        el.disabled = disabled;
+      });
+
+      if (disabled) {
+        btnEnviar.textContent = "Enviando...";
+      } else {
+        btnEnviar.textContent = "Enviar reporte";
+      }
+    }
+
+    function openModal(title, message) {
+      modalTitle.textContent = title;
+      modalMsg.textContent = message;
+      modalBackdrop.style.display = "flex";
+      modalBackdrop.setAttribute("aria-hidden", "false");
+      modalOk.focus();
+    }
+
+    function closeModal() {
+      modalBackdrop.style.display = "none";
+      modalBackdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function resetForm() {
+      $("parq").value = "";
+      $("placa").value = "";
+      $("fotoCamara").value = "";
+      $("fotoGaleria").value = "";
+      hintSizeEl.textContent = "";
+      setStatus("", "");
     }
 
     $("btnCamara").addEventListener("click", () => $("fotoCamara").click());
@@ -180,15 +254,36 @@
     $("fotoCamara").addEventListener("change", previewSizeHint);
     $("fotoGaleria").addEventListener("change", previewSizeHint);
 
+    modalOk.addEventListener("click", () => {
+      closeModal();
+      resetForm();
+      setFormDisabled(false);
+      $("parq").focus();
+    });
+
+    // cerrar modal tocando fuera (opcional)
+    modalBackdrop.addEventListener("click", (e) => {
+      if (e.target === modalBackdrop) modalOk.click();
+    });
+
     $("enviar").addEventListener("click", async () => {
+      if (btnEnviar.disabled) return;
+
+      setFormDisabled(true);
+
       try {
         const parqueadero = $("parq").value.trim();
         const placaDigitada = normalizePlate($("placa").value);
-        const token = $("token").value.trim();
         const file = getSelectedFile();
 
-        if (!parqueadero) return setStatus("Falta el parqueadero.", "err");
-        if (!file) return setStatus("Debes tomar o subir una foto.", "err");
+        if (!parqueadero) {
+          setFormDisabled(false);
+          return openModal("Faltan datos", "Falta el parqueadero.");
+        }
+        if (!file) {
+          setFormDisabled(false);
+          return openModal("Faltan datos", "Debes tomar o subir una foto.");
+        }
 
         setStatus("Procesando imagen (reduciendo a < 2MB)…", "");
 
@@ -199,9 +294,11 @@
           `(maxSide=${meta.maxSide}px, quality=${meta.quality}).`;
 
         if (!ok) {
-          return setStatus(
-            `No se pudo bajar la imagen a menos de 2MB. ` +
-            `Intenta tomar la foto con menor resolución o desde más lejos.`, "err"
+          setFormDisabled(false);
+          return openModal(
+            "No se pudo enviar",
+            "No se pudo bajar la imagen a menos de 2MB.\n" +
+            "Intenta tomar la foto con menor resolución o desde más lejos."
           );
         }
 
@@ -210,23 +307,23 @@
         const form = new FormData();
         form.append("parqueadero_reportado", parqueadero);
         form.append("placa_digitada", placaDigitada);
-        form.append("token", token);
         form.append("foto", outFile, outFile.name);
         form.append("client_timestamp", new Date().toISOString());
 
         const res = await fetch(N8N_WEBHOOK_URL, { method: "POST", body: form });
         const text = await res.text();
 
-        if (!res.ok) return setStatus(`Error al enviar (${res.status}). ${text}`, "err");
+        if (!res.ok) {
+          setStatus("", "");
+          return openModal("Error al enviar", `Error (${res.status}).\n${text}`);
+        }
 
-        setStatus("Reporte enviado ✅ Gracias.", "ok");
-
-        $("fotoCamara").value = "";
-        $("fotoGaleria").value = "";
-        hintSizeEl.textContent = "";
+        setStatus("", "");
+        return openModal("Enviado ✅", "Reporte enviado. Gracias.");
 
       } catch (e) {
-        setStatus("Error: " + (e?.message || e), "err");
+        setStatus("", "");
+        return openModal("Error", "Error: " + (e?.message || e));
       }
     });
   </script>
