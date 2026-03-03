@@ -25,7 +25,7 @@
 
   <div class="card">
     <div class="row">
-      
+
       <div>
         <label for="parq">Parqueadero afectado *</label>
         <input id="parq" placeholder="Ej: T4-140-4147 o P-214" required />
@@ -54,6 +54,8 @@
         <div class="hint">
           Puedes tomar la foto en el momento o subir una imagen que ya tengas.
         </div>
+
+        <div id="hintSize" class="hint"></div>
       </div>
 
       <div>
@@ -73,6 +75,7 @@
 
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
+    const hintSizeEl = $("hintSize");
 
     function setStatus(msg, kind) {
       statusEl.textContent = msg;
@@ -94,6 +97,79 @@
       return $("fotoGaleria").files?.[0] || $("fotoCamara").files?.[0] || null;
     }
 
+    // --- NUEVO: Compresión/resize en front-end ---
+    function fmtKB(bytes) {
+      return (bytes / 1024).toFixed(0) + " KB";
+    }
+
+    function readFileAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    }
+
+    async function compressImageToJpeg(file, opts = {}) {
+      const {
+        maxSide = 1280,
+        quality = 0.75
+      } = opts;
+
+      const dataUrl = await readFileAsDataURL(file);
+
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+
+      let w = img.width;
+      let h = img.height;
+
+      // resize manteniendo proporción
+      const longer = Math.max(w, h);
+      if (longer > maxSide) {
+        const scale = maxSide / longer;
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+
+      // fondo blanco por si viene PNG con transparencia
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const blob = await new Promise((resolve) => {
+        canvas.toBlob((b) => resolve(b), "image/jpeg", quality);
+      });
+
+      // por seguridad
+      if (!blob) throw new Error("No se pudo procesar la imagen.");
+
+      // Devolver como File para mantener nombre y tipo
+      const outName = "foto.jpg";
+      return new File([blob], outName, { type: "image/jpeg" });
+    }
+
+    async function previewSizeHint() {
+      const file = getSelectedFile();
+      if (!file) { hintSizeEl.textContent = ""; return; }
+      hintSizeEl.textContent = `Tamaño original: ${fmtKB(file.size)}. Se comprimirá automáticamente antes de enviar.`;
+    }
+
+    $("fotoCamara").addEventListener("change", previewSizeHint);
+    $("fotoGaleria").addEventListener("change", previewSizeHint);
+    // --- FIN NUEVO ---
+
     $("enviar").addEventListener("click", async () => {
       try {
         const parqueadero = $("parq").value.trim();
@@ -104,13 +180,27 @@
         if (!parqueadero) return setStatus("Falta el parqueadero.", "err");
         if (!file) return setStatus("Debes tomar o subir una foto.", "err");
 
+        setStatus("Procesando imagen…", "");
+
+        // NUEVO: comprimir/resize antes de enviar
+        const fotoComprimida = await compressImageToJpeg(file, {
+          maxSide: 1280,
+          quality: 0.75
+        });
+
+        // Mensaje de tamaño final (útil para diagnosticar)
+        hintSizeEl.textContent = `Tamaño original: ${fmtKB(file.size)} → Tamaño enviado: ${fmtKB(fotoComprimida.size)}.`;
+
         setStatus("Enviando…", "");
 
         const form = new FormData();
         form.append("parqueadero_reportado", parqueadero);
         form.append("placa_digitada", placaDigitada);
         form.append("token", token);
-        form.append("foto", file, file.name || "foto.jpg");
+
+        // IMPORTANTE: mantenemos el mismo nombre de campo "foto"
+        form.append("foto", fotoComprimida, fotoComprimida.name);
+
         form.append("client_timestamp", new Date().toISOString());
 
         const res = await fetch(N8N_WEBHOOK_URL, {
@@ -129,6 +219,7 @@
         // Reset de imagen
         $("fotoCamara").value = "";
         $("fotoGaleria").value = "";
+        hintSizeEl.textContent = "";
 
       } catch (e) {
         setStatus("Error: " + (e?.message || e), "err");
