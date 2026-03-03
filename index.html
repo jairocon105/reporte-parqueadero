@@ -10,7 +10,8 @@
     label { display: block; margin: 12px 0 6px; font-weight: 600; }
     input, button { width: 100%; padding: 12px; font-size: 16px; }
     input { box-sizing: border-box; }
-    button { margin-top: 14px; cursor: pointer; }
+    button { margin-top: 10px; cursor: pointer; border-radius: 8px; border: 1px solid #ccc; }
+    button.primary { background: #111; color: white; border: none; margin-top: 14px; }
     .hint { font-size: 13px; opacity: .75; margin-top: 6px; }
     .row { display: grid; grid-template-columns: 1fr; gap: 10px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
@@ -24,6 +25,7 @@
 
   <div class="card">
     <div class="row">
+      
       <div>
         <label for="parq">Parqueadero afectado *</label>
         <input id="parq" placeholder="Ej: T4-140-4147 o P-214" required />
@@ -37,10 +39,21 @@
       </div>
 
       <div>
-        <label for="foto">Foto del vehículo *</label>
-        <!-- capture="environment" abre cámara trasera en muchos móviles -->
-        <input id="foto" type="file" accept="image/*" required />
-        <div class="hint">Toma la foto enfocando la placa y el carro completo si puedes.</div>
+        <label>Foto del vehículo *</label>
+
+        <button type="button" id="btnCamara">
+          📷 Tomar foto (Cámara)
+        </button>
+        <input id="fotoCamara" type="file" accept="image/*" capture="environment" style="display:none" />
+
+        <button type="button" id="btnGaleria">
+          🖼️ Subir foto (Galería)
+        </button>
+        <input id="fotoGaleria" type="file" accept="image/*" style="display:none" />
+
+        <div class="hint">
+          Puedes tomar la foto en el momento o subir una imagen que ya tengas.
+        </div>
       </div>
 
       <div>
@@ -49,18 +62,14 @@
         <div class="hint">Sirve para evitar reportes de personas no autorizadas.</div>
       </div>
 
-      <button id="enviar">Enviar reporte</button>
+      <button id="enviar" class="primary">Enviar reporte</button>
       <div id="status" class="status"></div>
+
     </div>
   </div>
 
   <script>
-    // 1) Pega aquí tu Webhook "Production" de n8n (recomendado, no el Test)
     const N8N_WEBHOOK_URL = "https://betterlifeall.app.n8n.cloud/webhook/7c8fb655-d8a6-44f8-a640-a8054d80e12b";
-
-    // 2) Si quieres una clave simple adicional, puedes validar esto en n8n
-    //    (puedes dejarlo vacío si no lo usarás)
-    // const CLIENT_SHARED_KEY = "CAMBIA-ESTO";
 
     const $ = (id) => document.getElementById(id);
     const statusEl = $("status");
@@ -77,15 +86,23 @@
         .trim();
     }
 
+    // Botones cámara y galería
+    $("btnCamara").addEventListener("click", () => $("fotoCamara").click());
+    $("btnGaleria").addEventListener("click", () => $("fotoGaleria").click());
+
+    function getSelectedFile() {
+      return $("fotoGaleria").files?.[0] || $("fotoCamara").files?.[0] || null;
+    }
+
     $("enviar").addEventListener("click", async () => {
       try {
         const parqueadero = $("parq").value.trim();
         const placaDigitada = normalizePlate($("placa").value);
         const token = $("token").value.trim();
-        const file = $("foto").files?.[0];
+        const file = getSelectedFile();
 
         if (!parqueadero) return setStatus("Falta el parqueadero.", "err");
-        if (!file) return setStatus("Falta la foto.", "err");
+        if (!file) return setStatus("Debes tomar o subir una foto.", "err");
 
         setStatus("Enviando…", "");
 
@@ -102,17 +119,17 @@
         });
 
         const text = await res.text();
+
         if (!res.ok) {
           return setStatus(`Error al enviar (${res.status}). ${text}`, "err");
         }
 
-        // n8n puede responder JSON; mostramos algo simple
         setStatus("Reporte enviado ✅ Gracias.", "ok");
 
-        // Reset opcional
-        $("foto").value = "";
-        // $("parq").value = ""; // si quieres borrar también
-        // $("placa").value = "";
+        // Reset de imagen
+        $("fotoCamara").value = "";
+        $("fotoGaleria").value = "";
+
       } catch (e) {
         setStatus("Error: " + (e?.message || e), "err");
       }
